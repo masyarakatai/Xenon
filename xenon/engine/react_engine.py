@@ -872,7 +872,7 @@ class ReActEngine(BaseEngine):
                     # 单一语义通道：并行包装不丢失结构化 success/degraded 标记。
                     from xenon.nodes.tool_executor import _ToolObservation
 
-                    for action, obs in zip(raw_actions, tool_observations):
+                    for action, obs in zip(raw_actions, tool_observations, strict=False):
                         if isinstance(obs, str) and hasattr(obs, "success"):
                             wrapped = _ToolObservation(
                                 f"[{action['action']}] {str(obs)[:200]}...",
@@ -907,7 +907,7 @@ class ReActEngine(BaseEngine):
                     else:
                         observation = "\n\n".join(
                             f"[{action['action']}] {item}"
-                            for action, item in zip(raw_actions, tool_observations)
+                            for action, item in zip(raw_actions, tool_observations, strict=False)
                         )
 
                 # 将观察结果加入对话
@@ -1652,7 +1652,7 @@ class ReActEngine(BaseEngine):
                 callback=self.callback,
                 model_configs=self.model_configs,
             )
-            setattr(sub, "_subagent_depth", self._subagent_depth + 1)
+            sub._subagent_depth = self._subagent_depth + 1
             self._inherit_execution_context(sub)
             self._last_subagent = sub
             return sub
@@ -1667,7 +1667,7 @@ class ReActEngine(BaseEngine):
                 callback=self.callback,
                 model_configs=self.model_configs,
             )
-            setattr(sub, "_subagent_depth", self._subagent_depth + 1)
+            sub._subagent_depth = self._subagent_depth + 1
             self._inherit_execution_context(sub)
             self._last_subagent = sub
             return sub
@@ -1683,7 +1683,7 @@ class ReActEngine(BaseEngine):
                 callback=self.callback,
                 model_configs=self.model_configs,
             )
-            setattr(sub, "_subagent_depth", self._subagent_depth + 1)
+            sub._subagent_depth = self._subagent_depth + 1
             self._inherit_execution_context(sub)
             self._last_subagent = sub
             return sub
@@ -1698,7 +1698,7 @@ class ReActEngine(BaseEngine):
                 callback=self.callback,
                 model_configs=self.model_configs,
             )
-            setattr(sub, "_subagent_depth", self._subagent_depth + 1)
+            sub._subagent_depth = self._subagent_depth + 1
             self._inherit_execution_context(sub)
             self._last_subagent = sub
             return sub
@@ -1713,7 +1713,7 @@ class ReActEngine(BaseEngine):
                 callback=self.callback,
                 model_configs=self.model_configs,
             )
-            setattr(sub, "_subagent_depth", self._subagent_depth + 1)
+            sub._subagent_depth = self._subagent_depth + 1
             self._inherit_execution_context(sub)
             self._last_subagent = sub
             return sub
