@@ -50,8 +50,15 @@ def _write(tmp_path: Path, name: str, content: str) -> Path:
     return path
 
 
-class _FlakyPath(Path):
-    """仅对 lib.py 的 read_text 抛错，驱动“代码片段读取失败”的兜底分支。"""
+_PathImpl = type(Path())
+
+
+class _FlakyPath(_PathImpl):
+    """仅对 lib.py 的 read_text 抛错，驱动“代码片段读取失败”的兜底分支。
+
+    基类用具体实现（PosixPath/WindowsPath）而非 pathlib.Path：3.12 之前
+    直接继承 Path 会因缺少 _flavour 在 3.10/3.11 上报 AttributeError。
+    """
 
     def read_text(self, *args, **kwargs):
         if self.name == "lib.py":
