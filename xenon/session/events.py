@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 HASH_FIELD = "h"
 PREV_FIELD = "prev"
 GENESIS = "genesis"
-# 可选密钥锚点（#106）：设置后链哈希改 HMAC-SHA256(key, prev ‖ 正文)。
+# 可选密钥锚点（#106）：设置后链哈希改 HMAC-SHA256(key, prev ‖ hk ‖ 正文)。
 HMAC_KEY_ENV = "XENON_EVIDENCE_HMAC_KEY"
 KEY_FIELD = "hk"
 KEYED_VALUE = "hmac-sha256"
@@ -53,21 +53,39 @@ def canonical_event_json(record: dict) -> str:
     return json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+_weak_key_warned = False
+
+
 def evidence_hmac_key() -> str | None:
-    """密钥锚点密钥（仅环境变量，绝不落盘）。"""
-    return os.environ.get(HMAC_KEY_ENV, "").strip() or None
+    """密钥锚点密钥（仅环境变量，绝不落盘）。
+
+    少于 16 字节的密钥撑不起锚点，首见时告警一次（不改变返回值）。
+    """
+    global _weak_key_warned
+    key = os.environ.get(HMAC_KEY_ENV, "").strip() or None
+    if key is not None and len(key.encode("utf-8")) < 16 and not _weak_key_warned:
+        _weak_key_warned = True
+        logger.warning(
+            "%s 仅 %d 字节（建议 ≥16），证据链锚点强度不足",
+            HMAC_KEY_ENV,
+            len(key.encode("utf-8")),
+        )
+    return key
 
 
 def event_hash_hex(record: dict, key: str | None = None) -> str:
     """事件内容哈希。
 
-    默认 sha256(规范化正文) 十六进制；传入 key 时改 HMAC-SHA256(key, prev ‖ 正文)，
-    前驱链接一并纳入签名，缺密钥者无法重算通过。
+    默认 sha256(规范化正文) 十六进制；传入 key 时改 HMAC-SHA256(key,
+    prev ‖ hk ‖ 正文)：前驱链接与模式标记一并纳入签名，缺密钥者无法
+    重算通过，篡改 hk 标记同样核验失败。
     """
     body = canonical_event_json(record)
     if key is None:
         return hashlib.sha256(body.encode("utf-8")).hexdigest()
-    material = f"{record.get(PREV_FIELD, '')}\n{body}".encode("utf-8")
+    material = (
+        f"{record.get(PREV_FIELD, '')}\n{record.get(KEY_FIELD, '')}\n{body}"
+    ).encode("utf-8")
     return hmac.new(key.encode("utf-8"), material, hashlib.sha256).hexdigest()
 
 
@@ -113,7 +131,8 @@ def verify_event_chain(events: list[dict], *, key: str | None = None) -> ChainRe
     """重新计算每条事件的哈希并检查前驱链接（append-only 自证）。
 
     key 与写入时一致才能核验 keyed 事件；缺密钥时 keyed 事件计入
-    keyed_pending 而不算通过（绝不静默放行）。
+    keyed_pending 而不算通过（绝不静默放行）。存储哈希仍是后继事件的
+    链接锚点：缺密钥只跳过 MAC 核验，前驱链接照常检查（链接不依赖密钥）。
     """
     report = ChainReport(total=len(events))
     prev_expected: str | None = None
@@ -124,12 +143,13 @@ def verify_event_chain(events: list[dict], *, key: str | None = None) -> ChainRe
             report.legacy += 1
             continue
         is_keyed = KEY_FIELD in event
+        can_verify = True
         if is_keyed:
             report.keyed += 1
             if key is None:
                 report.keyed_pending += 1
-                continue
-        if event_hash_hex(event, key=key if is_keyed else None) != stored:
+                can_verify = False  # 只跳过 MAC；链接检查不依赖密钥
+        if can_verify and event_hash_hex(event, key=key if is_keyed else None) != stored:
             report.broken_at = idx
             return report
         expected = event.get(PREV_FIELD)
@@ -145,8 +165,9 @@ def verify_event_chain(events: list[dict], *, key: str | None = None) -> ChainRe
                 return report
             chain_started = True
         prev_expected = stored
-        report.head_hash = stored
-        report.verified += 1
+        if can_verify:
+            report.head_hash = stored
+            report.verified += 1
         if not is_keyed:
             report.unkeyed += 1
     return report
@@ -242,9 +263,10 @@ class SessionEventLog:
         )
         record[PREV_FIELD] = prev or GENESIS
         key = evidence_hmac_key()
-        record[HASH_FIELD] = event_hash_hex(record, key=key)
+        # hk 先写入再算哈希：模式标记是签名材料的一部分。
         if key is not None:
             record[KEY_FIELD] = KEYED_VALUE
+        record[HASH_FIELD] = event_hash_hex(record, key=key)
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
             with open(self.path, "a", encoding="utf-8") as handle:

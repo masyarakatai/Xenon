@@ -342,3 +342,86 @@ def test_keyed_chain_resumes_after_reopen(tmp_path, monkeypatch):
     report = verify_event_chain(events, key="test-key-123")
     assert report.status == "ok"
     assert events[1]["prev"] == events[0]["h"]
+
+
+def test_mixed_chain_keyed_then_unkeyed_reports_partial(tmp_path, monkeypatch):
+    """反向混合（先设密钥、后撤密钥）：缺密钥核验不得误报断裂。
+
+    keyed 事件缺密钥时存储哈希仍是后继的链接锚点，链接检查照常推进，
+    只跳过 MAC 核验 → partial（keyed_pending=1），broken_at 为空。
+    """
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "test-key-123")
+    log = SessionEventLog("s-rev", directory=tmp_path)
+    log.append("turn/user", text="first")
+    monkeypatch.delenv("XENON_EVIDENCE_HMAC_KEY")
+    log.append("turn/user", text="second")
+    events = log.read()
+
+    report = verify_event_chain(events)
+    assert report.status == "partial"
+    assert report.broken_at is None
+    assert report.keyed == 1 and report.keyed_pending == 1
+    assert report.verified == 1 and report.unkeyed == 1
+
+    # 密钥在手时两条都可验，混合模式仍为 partial
+    report2 = verify_event_chain(events, key="test-key-123")
+    assert report2.status == "partial"
+    assert report2.broken_at is None
+    assert report2.verified == 2
+    assert report2.mode == "mixed"
+
+
+def test_keyed_marker_tamper_breaks_with_key(tmp_path, monkeypatch):
+    """hk 模式标记纳入签名：改写标记值即核验失败。"""
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "test-key-123")
+    log = SessionEventLog("s-mark", directory=tmp_path)
+    log.append("turn/user", text="hello")
+    events = json.loads(json.dumps(log.read()))
+    events[0][KEY_FIELD] = "hmac-sha512"  # 改写模式标记，正文与 prev 不动
+    report = verify_event_chain(events, key="test-key-123")
+    assert report.status == "broken"
+    assert report.broken_at == 0
+
+
+def test_unkeyed_marker_addition_breaks_with_key(tmp_path):
+    """给无标记事件补 hk 标记：有密钥核验判为断裂。"""
+    log = SessionEventLog("s-mark2", directory=tmp_path)
+    log.append("turn/user", text="hello")
+    events = json.loads(json.dumps(log.read()))
+    events[0][KEY_FIELD] = KEYED_VALUE
+    report = verify_event_chain(events, key="test-key-123")
+    assert report.status == "broken"
+    assert report.broken_at == 0
+
+
+def test_weak_hmac_key_warns_once(monkeypatch, caplog):
+    """密钥短于 16 字节时告警一次，且不影响返回值。"""
+    import logging
+
+    from xenon.session import events as events_mod
+
+    monkeypatch.setattr(events_mod, "_weak_key_warned", False)
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "short")
+    with caplog.at_level(logging.WARNING, logger="xenon.session.events"):
+        first = events_mod.evidence_hmac_key()
+        second = events_mod.evidence_hmac_key()
+    assert first == "short" and second == "short"
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "16" in warnings[0].message
+
+
+def test_evidence_global_view_shows_lock_for_keyed_ok(tmp_path, monkeypatch):
+    """全局视图对完整 keyed 链显示 🔒（否则回退到状态图标）。"""
+    from xenon.repl.command_groups.evidence import _cmd_evidence
+    from xenon.session import events as events_mod
+
+    monkeypatch.setattr(
+        events_mod, "session_events_dir", lambda: __import__("pathlib").Path(tmp_path)
+    )
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "test-key-123")
+    SessionEventLog("sess-lock", directory=tmp_path).append("turn/user", text="hi")
+
+    out = _cmd_evidence(args="all", session_state={})
+    assert "🔒" in out
+    assert "sess-lock" in out

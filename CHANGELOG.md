@@ -7,7 +7,7 @@
 
 ### 证据层
 
-- 会话事件哈希链新增**可选密钥锚点**（#106）：设置 `XENON_EVIDENCE_HMAC_KEY` 后，链哈希从 sha256(正文) 改为 HMAC-SHA256(key, prev ‖ 事件正文)，前驱链接一并纳入签名；密钥只从环境变量读取、永不落盘，事件文件仅带 `hk: "hmac-sha256"` 模式标记。缺密钥的核验者遇到 keyed 链计入"待核验"（状态 `partial`，绝不静默放行）；无密钥写入后再设密钥的混合模式核验为 `mixed/partial`，`/evidence` 新增链模式显示（keyed/unkeyed/mixed，keyed 完整链显示 🔒）。默认（不设密钥）行为与以前完全一致。
+- 会话事件哈希链新增**可选密钥锚点**（#106）：设置 `XENON_EVIDENCE_HMAC_KEY` 后，链哈希从 sha256(正文) 改为 HMAC-SHA256(key, prev ‖ hk ‖ 事件正文)，前驱链接与 hk 模式标记一并纳入签名；密钥只从环境变量读取、永不落盘，事件文件仅带 `hk: "hmac-sha256"` 模式标记。缺密钥的核验者遇到 keyed 链计入"待核验"（状态 `partial`，绝不静默放行）；无密钥写入后再设密钥的混合模式核验为 `mixed/partial`，`/evidence` 新增链模式显示（keyed/unkeyed/mixed，keyed 完整链显示 🔒）。默认（不设密钥）行为与以前完全一致。
 
 ### 引擎
 
