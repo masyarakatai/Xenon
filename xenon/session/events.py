@@ -101,6 +101,7 @@ class ChainReport:
     keyed: int = 0  # 带密钥锚点标记的事件数
     keyed_pending: int = 0  # 因缺少密钥而无法核验的 keyed 事件数
     unkeyed: int = 0  # 以明文摘要核验通过的无标记事件数
+    key_expected: bool = False  # 调用方提供了密钥，链应包含 keyed 证据
 
     @property
     def status(self) -> str:
@@ -115,6 +116,11 @@ class ChainReport:
             return "legacy"  # 全部旧格式：无法自证
         if self.legacy or self.keyed_pending or (self.keyed and self.unkeyed):
             return "partial"  # 旧格式 / 缺密钥 / 混合模式
+        # The verifier was given a key, but the whole chain is unkeyed.  This
+        # is the downgrade shape: stripping every hk marker and recomputing
+        # plain sha256 links must not be reported as a clean ok.
+        if self.key_expected and self.keyed == 0 and self.unkeyed:
+            return "partial"
         return "ok"
 
     @property
@@ -134,7 +140,7 @@ def verify_event_chain(events: list[dict], *, key: str | None = None) -> ChainRe
     keyed_pending 而不算通过（绝不静默放行）。存储哈希仍是后继事件的
     链接锚点：缺密钥只跳过 MAC 核验，前驱链接照常检查（链接不依赖密钥）。
     """
-    report = ChainReport(total=len(events))
+    report = ChainReport(total=len(events), key_expected=key is not None)
     prev_expected: str | None = None
     chain_started = False
     for idx, event in enumerate(events):

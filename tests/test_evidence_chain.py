@@ -6,8 +6,10 @@ import json
 
 from xenon.session.events import (
     GENESIS,
+    HASH_FIELD,
     KEY_FIELD,
     KEYED_VALUE,
+    PREV_FIELD,
     ChainReport,
     SessionEventLog,
     event_hash_hex,
@@ -112,6 +114,10 @@ def test_chain_report_status_labels():
     assert ChainReport(total=2, verified=1, legacy=1).status == "partial"
     assert ChainReport(total=2, verified=2).status == "ok"
     assert ChainReport(total=2, verified=1, broken_at=1).status == "broken"
+    assert (
+        ChainReport(total=2, verified=2, unkeyed=2, key_expected=True).status
+        == "partial"
+    )
 
 
 def test_append_resumes_chain_after_reopen(tmp_path):
@@ -425,3 +431,34 @@ def test_evidence_global_view_shows_lock_for_keyed_ok(tmp_path, monkeypatch):
     out = _cmd_evidence(args="all", session_state={})
     assert "🔒" in out
     assert "sess-lock" in out
+
+
+def test_unkeyed_downgrade_does_not_pass_when_key_is_supplied(tmp_path, monkeypatch):
+    """Stripping all hk markers and rebuilding a plain chain is a downgrade.
+
+    Without a key the chain is indistinguishable from an ordinary unkeyed
+    chain; with a key supplied the verifier must report partial, not ok.
+    """
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "test-key-123456")
+    log = SessionEventLog("downgrade", directory=tmp_path)
+    log.append("turn/user", text="a")
+    log.append("turn/user", text="b")
+    events = log.read()
+
+    prev = GENESIS
+    for event in events:
+        event.pop(KEY_FIELD, None)
+        event[PREV_FIELD] = prev
+        event[HASH_FIELD] = event_hash_hex(event)
+        prev = event[HASH_FIELD]
+
+    report = verify_event_chain(events, key="test-key-123456")
+    assert report.status == "partial"
+    assert report.key_expected is True
+    assert report.keyed == 0
+    assert report.unkeyed == 2
+    assert report.broken_at is None
+
+    # This is the unavoidable boundary: without the key the plain chain is
+    # indistinguishable from a legitimate unkeyed chain.
+    assert verify_event_chain(events).status == "ok"
